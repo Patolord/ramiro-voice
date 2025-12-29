@@ -2,7 +2,6 @@
 
 import { v } from "convex/values";
 import { action } from "./_generated/server";
-import { AssemblyAI } from "assemblyai";
 
 // Get a temporary token for real-time streaming (keeps API key secure)
 export const getStreamingToken = action({
@@ -16,10 +15,24 @@ export const getStreamingToken = action({
       throw new Error("AssemblyAI API key not configured");
     }
 
-    const client = new AssemblyAI({ apiKey });
-    const token = await client.realtime.createTemporaryToken({ expires_in: 3600 });
+    // Use the new Universal streaming API endpoint
+    const response = await fetch("https://api.assemblyai.com/v2/realtime/token", {
+      method: "POST",
+      headers: {
+        "Authorization": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        expires_in: 3600,
+      }),
+    });
 
-    return { token };
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to get streaming token: ${error}`);
+    }
+
+    const data = await response.json();
+    return { token: data.token };
   },
 });
-
