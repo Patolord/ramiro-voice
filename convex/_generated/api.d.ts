@@ -8,7 +8,8 @@
  * @module
  */
 
-import type * as myFunctions from "../myFunctions.js";
+import type * as recordings from "../recordings.js";
+import type * as streaming from "../streaming.js";
 
 import type {
   ApiFromModules,
@@ -17,7 +18,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  myFunctions: typeof myFunctions;
+  recordings: typeof recordings;
+  streaming: typeof streaming;
 }>;
 
 /**

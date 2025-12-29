@@ -1,328 +1,355 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
-import Link from "next/link";
-import Image from "next/image";
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Id } from "../convex/_generated/dataModel";
+
+type RecordingStatus = "idle" | "connecting" | "recording";
+
+const SAMPLE_RATE = 16000;
 
 export default function Home() {
-  return (
-    <>
-      <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-md p-4 border-b border-slate-200 dark:border-slate-700 flex flex-row justify-between items-center shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-3">
-            <Image src="/convex.svg" alt="Convex Logo" width={32} height={32} />
-            <div className="w-px h-8 bg-slate-300 dark:bg-slate-600"></div>
-            <Image
-              src="/nextjs-icon-light-background.svg"
-              alt="Next.js Logo"
-              width={32}
-              height={32}
-              className="dark:hidden"
-            />
-            <Image
-              src="/nextjs-icon-dark-background.svg"
-              alt="Next.js Logo"
-              width={32}
-              height={32}
-              className="hidden dark:block"
-            />
-          </div>
-          <h1 className="font-semibold text-slate-800 dark:text-slate-200">
-            Convex + Next.js
-          </h1>
-        </div>
-        <AuthPopoverButton />
-      </header>
-      <main className="p-8 flex flex-col gap-8">
-        <Content />
-      </main>
-    </>
+  const [status, setStatus] = useState<RecordingStatus>("idle");
+  const [duration, setDuration] = useState(0);
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [currentRecordingId, setCurrentRecordingId] = useState<Id<"recordings"> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const startTimeRef = useRef<number>(0);
+
+  const getStreamingToken = useAction(api.streaming.getStreamingToken);
+  const createRecording = useMutation(api.recordings.createRecording);
+  const appendTranscription = useMutation(api.recordings.appendTranscription);
+  const finishRecording = useMutation(api.recordings.finishRecording);
+  const recordings = useQuery(api.recordings.listRecordings);
+  const currentRecording = useQuery(
+    api.recordings.getRecording,
+    currentRecordingId ? { recordingId: currentRecordingId } : "skip"
   );
-}
 
-function Content() {
-  const { viewer, numbers } =
-    useQuery(api.myFunctions.listNumbers, {
-      count: 10,
-    }) ?? {};
-  const addNumber = useMutation(api.myFunctions.addNumber);
-
-  if (viewer === undefined || numbers === undefined) {
-    return (
-      <div className="mx-auto">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
-          <div
-            className="w-2 h-2 bg-slate-500 rounded-full animate-bounce"
-            style={{ animationDelay: "0.1s" }}
-          ></div>
-          <div
-            className="w-2 h-2 bg-slate-600 rounded-full animate-bounce"
-            style={{ animationDelay: "0.2s" }}
-          ></div>
-          <p className="ml-2 text-slate-600 dark:text-slate-400">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-6 max-w-lg mx-auto">
-      <div>
-        <h2 className="font-bold text-xl text-slate-800 dark:text-slate-200">
-          Welcome!
-        </h2>
-        <p className="text-slate-600 dark:text-slate-400 mt-2">
-          This demo app generates random numbers and stores them in your Convex
-          database.
-        </p>
-      </div>
-
-      <div className="h-px bg-slate-200 dark:bg-slate-700"></div>
-
-      <div className="flex flex-col gap-4">
-        <h2 className="font-semibold text-xl text-slate-800 dark:text-slate-200">
-          Number generator
-        </h2>
-        <p className="text-slate-600 dark:text-slate-400 text-sm">
-          Click the button below to generate a new number. The data is persisted
-          in the Convex cloud database - open this page in another window and
-          see the data sync automatically!
-        </p>
-        <button
-          className="bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 text-white text-sm font-medium px-6 py-3 rounded-lg cursor-pointer transition-all duration-200 shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]"
-          onClick={() => {
-            void addNumber({ value: Math.floor(Math.random() * 10) });
-          }}
-        >
-          + Generate random number
-        </button>
-        <div className="bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-xl p-4 shadow-sm">
-          <p className="font-semibold text-slate-800 dark:text-slate-200 mb-2">
-            Newest Numbers
-          </p>
-          <p className="text-slate-700 dark:text-slate-300 font-mono text-lg">
-            {numbers?.length === 0
-              ? "Click the button to generate a number!"
-              : (numbers?.join(", ") ?? "...")}
-          </p>
-        </div>
-      </div>
-
-      <div className="h-px bg-slate-200 dark:bg-slate-700"></div>
-
-      <div className="flex flex-col gap-3">
-        <h2 className="font-semibold text-xl text-slate-800 dark:text-slate-200">
-          Making changes
-        </h2>
-        <p className="text-slate-600 dark:text-slate-400 text-sm">
-          Edit{" "}
-          <code className="text-sm font-semibold font-mono bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-600">
-            convex/myFunctions.ts
-          </code>{" "}
-          to change the backend.
-        </p>
-        <p className="text-slate-600 dark:text-slate-400 text-sm">
-          Edit{" "}
-          <code className="text-sm font-semibold font-mono bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-600">
-            app/page.tsx
-          </code>{" "}
-          to change the frontend.
-        </p>
-        <p className="text-slate-600 dark:text-slate-400 text-sm">
-          See the{" "}
-          <Link
-            href="/server"
-            className="text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 font-medium underline decoration-2 underline-offset-2 transition-colors"
-          >
-            /server route
-          </Link>{" "}
-          for an example of loading data in a server component
-        </p>
-      </div>
-
-      <div className="h-px bg-slate-200 dark:bg-slate-700"></div>
-
-      <div className="flex flex-col gap-4">
-        <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200">
-          Useful resources
-        </h2>
-        <div className="flex gap-4">
-          <div className="flex flex-col gap-4 w-1/2">
-            <ResourceCard
-              title="Convex docs"
-              description="Read comprehensive documentation for all Convex features."
-              href="https://docs.convex.dev/home"
-            />
-            <ResourceCard
-              title="Stack articles"
-              description="Learn about best practices, use cases, and more from a growing
-            collection of articles, videos, and walkthroughs."
-              href="https://www.typescriptlang.org/docs/handbook/2/basic-types.html"
-            />
-          </div>
-          <div className="flex flex-col gap-4 w-1/2">
-            <ResourceCard
-              title="Templates"
-              description="Browse our collection of templates to get started quickly."
-              href="https://www.convex.dev/templates"
-            />
-            <ResourceCard
-              title="Discord"
-              description="Join our developer community to ask questions, trade tips & tricks,
-            and show off your projects."
-              href="https://www.convex.dev/community"
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ResourceCard({
-  title,
-  description,
-  href,
-}: {
-  title: string;
-  description: string;
-  href: string;
-}) {
-  return (
-    <a
-      href={href}
-      className="flex flex-col gap-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 p-5 rounded-xl h-36 overflow-auto border border-slate-300 dark:border-slate-600 hover:border-slate-400 dark:hover:border-slate-500 shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02] group cursor-pointer"
-    >
-      <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors">
-        {title} →
-      </h3>
-      <p className="text-xs text-slate-600 dark:text-slate-400">
-        {description}
-      </p>
-    </a>
-  );
-}
-
-function AuthPopoverButton() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [selectedAuth, setSelectedAuth] = useState<
-    "authkit" | "clerk" | "convexauth"
-  >("authkit");
-  const [copied, setCopied] = useState(false);
-  const popoverRef = useRef<HTMLDivElement>(null);
-
-  const commands = {
-    authkit: "npm create convex@latest -- --template nextjs-authkit",
-    clerk: "npm create convex@latest -- --template nextjs-clerk",
-    convexauth: "npm create convex@latest -- --template nextjs-convexauth",
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(commands[selectedAuth]);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
+  // Cleanup on unmount
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        popoverRef.current &&
-        !popoverRef.current.contains(event.target as Node)
-      ) {
-        setIsOpen(false);
-      }
+    return () => {
+      cleanup();
     };
+  }, []);
 
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
+  const cleanup = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (workletNodeRef.current) {
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+  }, []);
+
+  const formatDuration = (seconds: number) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (hrs > 0) {
+      return `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    }
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const startRecording = async () => {
+    setError(null);
+    setStatus("connecting");
+    
+    try {
+      // Get streaming token
+      const { token } = await getStreamingToken();
+      
+      // Create recording entry
+      const timestamp = new Date().toLocaleString();
+      const recordingId = await createRecording({ title: `Meeting ${timestamp}` });
+      setCurrentRecordingId(recordingId);
+      setLiveTranscript("");
+
+      // Get microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          sampleRate: SAMPLE_RATE,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        } 
+      });
+      streamRef.current = stream;
+
+      // Set up Web Audio API for processing
+      const audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+      audioContextRef.current = audioContext;
+
+      // Load audio worklet for processing
+      await audioContext.audioWorklet.addModule(
+        URL.createObjectURL(new Blob([`
+          class PCMProcessor extends AudioWorkletProcessor {
+            constructor() {
+              super();
+              this.buffer = [];
+            }
+            
+            process(inputs) {
+              const input = inputs[0];
+              if (input.length > 0) {
+                const samples = input[0];
+                // Convert float32 to int16
+                for (let i = 0; i < samples.length; i++) {
+                  const s = Math.max(-1, Math.min(1, samples[i]));
+                  this.buffer.push(s < 0 ? s * 0x8000 : s * 0x7FFF);
+                }
+                // Send chunks periodically
+                if (this.buffer.length >= 4096) {
+                  this.port.postMessage(new Int16Array(this.buffer));
+                  this.buffer = [];
+                }
+              }
+              return true;
+            }
+          }
+          registerProcessor('pcm-processor', PCMProcessor);
+        `], { type: 'application/javascript' }))
+      );
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
+      workletNodeRef.current = workletNode;
+      source.connect(workletNode);
+
+      // Connect to AssemblyAI WebSocket
+      const ws = new WebSocket(
+        `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&token=${token}`
+      );
+      wsRef.current = ws;
+
+      let fullTranscript = "";
+
+      ws.onopen = () => {
+        setStatus("recording");
+        startTimeRef.current = Date.now();
+        
+        // Start timer
+        timerRef.current = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+          setDuration(elapsed);
+          
+          // Auto-stop at 1 hour
+          if (elapsed >= 3600) {
+            stopRecording();
+          }
+        }, 1000);
+
+        // Send audio data
+        workletNode.port.onmessage = (event) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            // Convert Int16Array to base64
+            const int16Array = event.data as Int16Array;
+            const uint8Array = new Uint8Array(int16Array.buffer);
+            const base64 = btoa(String.fromCharCode(...uint8Array));
+            ws.send(JSON.stringify({ audio_data: base64 }));
+          }
+        };
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.message_type === "FinalTranscript" && data.text) {
+          fullTranscript += (fullTranscript ? " " : "") + data.text;
+          setLiveTranscript(fullTranscript);
+          
+          // Save to database periodically
+          appendTranscription({ recordingId, text: fullTranscript });
+        } else if (data.message_type === "PartialTranscript" && data.text) {
+          // Show partial results (in progress)
+          setLiveTranscript(fullTranscript + (fullTranscript ? " " : "") + data.text);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
+        setError("Connection error. Please try again.");
+        cleanup();
+        setStatus("idle");
+      };
+
+      ws.onclose = () => {
+        console.log("WebSocket closed");
+      };
+
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Failed to start recording");
+      cleanup();
+      setStatus("idle");
+    }
+  };
+
+  const stopRecording = async () => {
+    if (status !== "recording") return;
+
+    const finalDuration = Math.floor((Date.now() - startTimeRef.current) / 1000);
+
+    // Send termination message
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ terminate_session: true }));
     }
 
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isOpen]);
+    cleanup();
+
+    // Finalize recording
+    if (currentRecordingId) {
+      await finishRecording({
+        recordingId: currentRecordingId,
+        duration: finalDuration,
+        finalTranscription: liveTranscript,
+      });
+    }
+
+    setStatus("idle");
+    setDuration(0);
+  };
 
   return (
-    <div className="relative" ref={popoverRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="bg-green-600 hover:bg-green-700 dark:bg-green-600 dark:hover:bg-green-500 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer transition-all duration-200 shadow-sm hover:shadow-md"
-      >
-        Want Auth?
-      </button>
+    <main className="min-h-screen flex flex-col items-center justify-center p-6">
+      <div className="w-full max-w-lg">
+        <h1 className="text-2xl font-light tracking-tight mb-12 text-center opacity-80">
+          meeting recorder
+        </h1>
 
-      {isOpen && (
-        <div className="absolute right-0 mt-2 w-[560px] bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-xl shadow-xl z-50 p-6">
-          <p className="text-slate-700 dark:text-slate-300 text-sm mb-4">
-            You can create a copy of this project with auth integrated by using
-            this command.
+        {/* Recording Button */}
+        <div className="flex flex-col items-center mb-12">
+          <button
+            onClick={status === "recording" ? stopRecording : startRecording}
+            disabled={status === "connecting"}
+            className={`
+              w-32 h-32 rounded-full transition-all duration-300 flex items-center justify-center
+              ${status === "recording" 
+                ? "bg-red-500 hover:bg-red-600 animate-pulse" 
+                : status === "connecting"
+                ? "bg-neutral-600 cursor-wait"
+                : "bg-neutral-800 hover:bg-neutral-700 hover:scale-105"
+              }
+            `}
+          >
+            {status === "recording" ? (
+              <div className="w-8 h-8 bg-white rounded-sm" />
+            ) : status === "connecting" ? (
+              <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <div className="w-0 h-0 border-l-[20px] border-l-white border-y-[12px] border-y-transparent ml-2" />
+            )}
+          </button>
+
+          <p className="mt-6 text-4xl font-mono tracking-wider opacity-90">
+            {formatDuration(duration)}
           </p>
 
-          <div className="flex flex-col gap-3 mb-4">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="auth"
-                value="authkit"
-                checked={selectedAuth === "authkit"}
-                onChange={(e) => setSelectedAuth(e.target.value as "authkit")}
-                className="w-4 h-4 cursor-pointer"
-              />
-              <Image src="/workos.svg" alt="WorkOS" width={20} height={20} />
-              <span className="text-slate-700 dark:text-slate-300 text-sm">
-                WorkOS AuthKit
-              </span>
-            </label>
+          <p className="mt-2 text-sm opacity-50">
+            {status === "idle" && "tap to record"}
+            {status === "connecting" && "connecting..."}
+            {status === "recording" && "recording... tap to stop"}
+          </p>
 
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="auth"
-                value="clerk"
-                checked={selectedAuth === "clerk"}
-                onChange={(e) => setSelectedAuth(e.target.value as "clerk")}
-                className="w-4 h-4 cursor-pointer"
-              />
-              <Image src="/clerk.svg" alt="Clerk" width={20} height={20} />
-              <span className="text-slate-700 dark:text-slate-300 text-sm">
-                Clerk
-              </span>
-            </label>
-
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="auth"
-                value="convexauth"
-                checked={selectedAuth === "convexauth"}
-                onChange={(e) =>
-                  setSelectedAuth(e.target.value as "convexauth")
-                }
-                className="w-4 h-4 cursor-pointer"
-              />
-              <Image src="/convex.svg" alt="Convex" width={20} height={20} />
-              <span className="text-slate-700 dark:text-slate-300 text-sm">
-                Convex Auth
-              </span>
-            </label>
-          </div>
-
-          <div className="bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg p-3 flex items-center justify-between gap-2">
-            <code className="text-xs text-slate-700 dark:text-slate-300 font-mono break-all">
-              {commands[selectedAuth]}
-            </code>
-            <button
-              onClick={handleCopy}
-              className="bg-slate-600 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs px-3 py-1 rounded cursor-pointer transition-colors flex-shrink-0"
-            >
-              {copied ? "Copied!" : "Copy"}
-            </button>
-          </div>
+          {error && (
+            <p className="mt-4 text-red-400 text-sm">{error}</p>
+          )}
         </div>
-      )}
-    </div>
+
+        {/* Live Transcription */}
+        {(status === "recording" || liveTranscript) && (
+          <div className="mb-8 p-4 border border-neutral-800 rounded-lg">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm opacity-70">
+                {status === "recording" ? "live transcription" : "transcription"}
+              </span>
+              {status === "recording" && (
+                <span className="flex items-center gap-2 text-xs text-red-400">
+                  <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                  live
+                </span>
+              )}
+            </div>
+            
+            <p className="text-sm leading-relaxed whitespace-pre-wrap opacity-80 max-h-64 overflow-y-auto">
+              {liveTranscript || (
+                <span className="opacity-40 italic">Listening...</span>
+              )}
+            </p>
+          </div>
+        )}
+
+        {/* Current Recording Details */}
+        {currentRecording && currentRecording.status === "completed" && (
+          <div className="mb-8 p-4 border border-neutral-800 rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm opacity-70">{currentRecording.title}</span>
+              <span className="text-xs px-2 py-1 rounded bg-green-900 text-green-300">
+                completed
+              </span>
+            </div>
+            <p className="text-xs opacity-50 mb-2">
+              Duration: {formatDuration(currentRecording.duration)}
+            </p>
+            {currentRecording.transcription && (
+              <p className="text-sm leading-relaxed whitespace-pre-wrap opacity-80 max-h-48 overflow-y-auto">
+                {currentRecording.transcription}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Past Recordings */}
+        {recordings && recordings.length > 0 && (
+          <div className="space-y-2">
+            <h2 className="text-sm opacity-50 mb-3">past recordings</h2>
+            {recordings
+              .filter((r: { _id: Id<"recordings"> }) => r._id !== currentRecordingId)
+              .slice(0, 5)
+              .map((recording: { _id: Id<"recordings">; title: string; duration: number; status: string }) => (
+                <button
+                  key={recording._id}
+                  onClick={() => {
+                    setCurrentRecordingId(recording._id);
+                    setLiveTranscript("");
+                  }}
+                  className="w-full flex items-center justify-between p-3 bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors text-left"
+                >
+                  <span className="text-sm truncate opacity-80">{recording.title}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs opacity-50 font-mono">
+                      {formatDuration(recording.duration)}
+                    </span>
+                    <span className={`w-2 h-2 rounded-full ${
+                      recording.status === "completed" ? "bg-green-500" :
+                      recording.status === "error" ? "bg-red-500" :
+                      "bg-yellow-500 animate-pulse"
+                    }`} />
+                  </div>
+                </button>
+              ))}
+          </div>
+        )}
+      </div>
+    </main>
   );
 }
