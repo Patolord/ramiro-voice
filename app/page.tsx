@@ -135,9 +135,9 @@ export default function Home() {
       workletNodeRef.current = workletNode;
       source.connect(workletNode);
 
-      // Connect to AssemblyAI Universal Streaming WebSocket
+      // Connect to AssemblyAI Universal Streaming WebSocket (Brazilian Portuguese)
       const ws = new WebSocket(
-        `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&encoding=pcm_s16le&token=${token}`
+        `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&encoding=pcm_s16le&language_code=pt&token=${token}`
       );
       wsRef.current = ws;
 
