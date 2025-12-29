@@ -99,7 +99,7 @@ export default function Home() {
       const audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
       audioContextRef.current = audioContext;
 
-      // Load audio worklet for processing
+      // Load audio worklet for processing - sends ~50ms chunks (800 samples at 16kHz)
       await audioContext.audioWorklet.addModule(
         URL.createObjectURL(new Blob([`
           class PCMProcessor extends AudioWorkletProcessor {
@@ -117,10 +117,11 @@ export default function Home() {
                   const s = Math.max(-1, Math.min(1, samples[i]));
                   this.buffer.push(s < 0 ? s * 0x8000 : s * 0x7FFF);
                 }
-                // Send chunks periodically
-                if (this.buffer.length >= 4096) {
-                  this.port.postMessage(new Int16Array(this.buffer));
-                  this.buffer = [];
+                // Send ~50ms chunks (800 samples at 16kHz)
+                if (this.buffer.length >= 800) {
+                  const int16Array = new Int16Array(this.buffer.slice(0, 800));
+                  this.port.postMessage(int16Array.buffer, [int16Array.buffer]);
+                  this.buffer = this.buffer.slice(800);
                 }
               }
               return true;
@@ -135,10 +136,16 @@ export default function Home() {
       workletNodeRef.current = workletNode;
       source.connect(workletNode);
 
-      // Connect to AssemblyAI Universal Streaming WebSocket (Brazilian Portuguese)
-      const ws = new WebSocket(
-        `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&encoding=pcm_s16le&language_code=pt&token=${token}`
-      );
+      // Connect to AssemblyAI v3 Universal Streaming WebSocket
+      // Using universal-streaming-multi for Portuguese support
+      const wsUrl = new URL("wss://streaming.assemblyai.com/v3/ws");
+      wsUrl.searchParams.set("sample_rate", String(SAMPLE_RATE));
+      wsUrl.searchParams.set("encoding", "pcm_s16le");
+      wsUrl.searchParams.set("format_turns", "true");
+      wsUrl.searchParams.set("speech_model", "universal-streaming-multi");
+      wsUrl.searchParams.set("token", token);
+      
+      const ws = new WebSocket(wsUrl.toString());
       wsRef.current = ws;
 
       let fullTranscript = "";
@@ -158,14 +165,11 @@ export default function Home() {
           }
         }, 1000);
 
-        // Send audio data
+        // Send audio data as raw binary
         workletNode.port.onmessage = (event) => {
           if (ws.readyState === WebSocket.OPEN) {
-            // Convert Int16Array to base64
-            const int16Array = event.data as Int16Array;
-            const uint8Array = new Uint8Array(int16Array.buffer);
-            const base64 = btoa(String.fromCharCode(...uint8Array));
-            ws.send(JSON.stringify({ audio_data: base64 }));
+            // Send raw PCM binary data
+            ws.send(event.data);
           }
         };
       };
@@ -173,15 +177,23 @@ export default function Home() {
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         
-        if (data.message_type === "FinalTranscript" && data.text) {
-          fullTranscript += (fullTranscript ? " " : "") + data.text;
-          setLiveTranscript(fullTranscript);
-          
-          // Save to database periodically
-          appendTranscription({ recordingId, text: fullTranscript });
-        } else if (data.message_type === "PartialTranscript" && data.text) {
-          // Show partial results (in progress)
-          setLiveTranscript(fullTranscript + (fullTranscript ? " " : "") + data.text);
+        // v3 API uses "Turn" events
+        if (data.type === "Turn") {
+          if (data.end_of_turn && data.transcript) {
+            // Final transcript for this turn
+            fullTranscript += (fullTranscript ? " " : "") + data.transcript;
+            setLiveTranscript(fullTranscript);
+            
+            // Save to database
+            appendTranscription({ recordingId, text: fullTranscript });
+          } else if (data.transcript) {
+            // Partial/in-progress transcript
+            setLiveTranscript(fullTranscript + (fullTranscript ? " " : "") + data.transcript);
+          }
+        } else if (data.type === "Begin") {
+          console.log("Session started:", data.id);
+        } else if (data.type === "Termination") {
+          console.log("Session terminated");
         }
       };
 
@@ -192,8 +204,8 @@ export default function Home() {
         setStatus("idle");
       };
 
-      ws.onclose = () => {
-        console.log("WebSocket closed");
+      ws.onclose = (event) => {
+        console.log("WebSocket closed:", event.code, event.reason);
       };
 
     } catch (err) {
@@ -209,9 +221,9 @@ export default function Home() {
 
     const finalDuration = Math.floor((Date.now() - startTimeRef.current) / 1000);
 
-    // Send termination message
+    // Send termination message (v3 format)
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ terminate_session: true }));
+      wsRef.current.send(JSON.stringify({ type: "Terminate" }));
     }
 
     cleanup();
@@ -238,7 +250,7 @@ export default function Home() {
 
         {/* Recording Button */}
         <div className="flex flex-col items-center mb-12">
-          <button
+      <button
             onClick={status === "recording" ? stopRecording : startRecording}
             disabled={status === "connecting"}
             className={`
@@ -258,7 +270,7 @@ export default function Home() {
             ) : (
               <div className="w-0 h-0 border-l-[20px] border-l-white border-y-[12px] border-y-transparent ml-2" />
             )}
-          </button>
+      </button>
 
           <p className="mt-6 text-4xl font-mono tracking-wider opacity-90">
             {formatDuration(duration)}
@@ -280,19 +292,19 @@ export default function Home() {
           <div className="mb-8 p-4 border border-neutral-800 rounded-lg">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm opacity-70">
-                {status === "recording" ? "live transcription" : "transcription"}
+                {status === "recording" ? "transcrição ao vivo" : "transcrição"}
               </span>
               {status === "recording" && (
                 <span className="flex items-center gap-2 text-xs text-red-400">
                   <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                  live
-                </span>
+                  ao vivo
+              </span>
               )}
             </div>
             
             <p className="text-sm leading-relaxed whitespace-pre-wrap opacity-80 max-h-64 overflow-y-auto">
               {liveTranscript || (
-                <span className="opacity-40 italic">Listening...</span>
+                <span className="opacity-40 italic">Ouvindo...</span>
               )}
             </p>
           </div>
@@ -304,11 +316,11 @@ export default function Home() {
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm opacity-70">{currentRecording.title}</span>
               <span className="text-xs px-2 py-1 rounded bg-green-900 text-green-300">
-                completed
+                concluído
               </span>
             </div>
             <p className="text-xs opacity-50 mb-2">
-              Duration: {formatDuration(currentRecording.duration)}
+              Duração: {formatDuration(currentRecording.duration)}
             </p>
             {currentRecording.transcription && (
               <p className="text-sm leading-relaxed whitespace-pre-wrap opacity-80 max-h-48 overflow-y-auto">
@@ -321,12 +333,12 @@ export default function Home() {
         {/* Past Recordings */}
         {recordings && recordings.length > 0 && (
           <div className="space-y-2">
-            <h2 className="text-sm opacity-50 mb-3">past recordings</h2>
+            <h2 className="text-sm opacity-50 mb-3">gravações anteriores</h2>
             {recordings
               .filter((r: { _id: Id<"recordings"> }) => r._id !== currentRecordingId)
               .slice(0, 5)
               .map((recording: { _id: Id<"recordings">; title: string; duration: number; status: string }) => (
-                <button
+            <button
                   key={recording._id}
                   onClick={() => {
                     setCurrentRecordingId(recording._id);
@@ -345,11 +357,11 @@ export default function Home() {
                       "bg-yellow-500 animate-pulse"
                     }`} />
                   </div>
-                </button>
+            </button>
               ))}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
+    </div>
     </main>
   );
 }

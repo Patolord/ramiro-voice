@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { action } from "./_generated/server";
 
 // Get a temporary token for real-time streaming (keeps API key secure)
+// Using the new v3 Universal Streaming API
 export const getStreamingToken = action({
   args: {},
   returns: v.object({
@@ -15,8 +16,8 @@ export const getStreamingToken = action({
       throw new Error("AssemblyAI API key not configured");
     }
 
-    // Use the new Universal streaming API endpoint
-    const response = await fetch("https://api.assemblyai.com/v2/realtime/token", {
+    // Use the new v3 streaming token endpoint
+    const response = await fetch("https://api.assemblyai.com/v3/streaming/token", {
       method: "POST",
       headers: {
         "Authorization": apiKey,
