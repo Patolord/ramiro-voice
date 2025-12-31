@@ -1,5 +1,7 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { workflow } from "./index";
 
 // Create a new recording entry
 export const createRecording = mutation({
@@ -36,7 +38,7 @@ export const appendTranscription = mutation({
   },
 });
 
-// Finish recording
+// Finish recording and trigger workflow for insights generation
 export const finishRecording = mutation({
   args: {
     recordingId: v.id("recordings"),
@@ -45,10 +47,65 @@ export const finishRecording = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // Update recording with final transcription
     await ctx.db.patch(args.recordingId, {
       duration: args.duration,
       transcription: args.finalTranscription,
-      status: "completed" as const,
+      status: "processing" as const, // Will be updated by workflow
+    });
+
+    // Start workflow to generate insights
+    const workflowId = await workflow.start(ctx, internal.workflows.processRecordingWorkflow, {
+      recordingId: args.recordingId,
+      transcription: args.finalTranscription,
+    });
+
+    // Store workflowId for tracking
+    await ctx.db.patch(args.recordingId, {
+      workflowId: workflowId,
+    });
+
+    return null;
+  },
+});
+
+// Internal mutation to update recording status
+export const updateStatus = internalMutation({
+  args: {
+    recordingId: v.id("recordings"),
+    status: v.union(
+      v.literal("recording"),
+      v.literal("completed"),
+      v.literal("error"),
+      v.literal("processing")
+    ),
+    errorMessage: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.recordingId, {
+      status: args.status,
+      ...(args.errorMessage !== undefined && { errorMessage: args.errorMessage }),
+    });
+    return null;
+  },
+});
+
+// Internal mutation to update recording with insights
+export const updateWithInsights = internalMutation({
+  args: {
+    recordingId: v.id("recordings"),
+    insights: v.string(),
+    status: v.union(
+      v.literal("completed"),
+      v.literal("error")
+    ),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.recordingId, {
+      insights: args.insights,
+      status: args.status,
     });
     return null;
   },
@@ -69,9 +126,11 @@ export const getRecording = query({
       status: v.union(
         v.literal("recording"),
         v.literal("completed"),
-        v.literal("error")
+        v.literal("error"),
+        v.literal("processing")
       ),
       transcription: v.optional(v.string()),
+      insights: v.optional(v.string()),
       errorMessage: v.optional(v.string()),
     })
   ),
@@ -86,6 +145,7 @@ export const getRecording = query({
       duration: recording.duration,
       status: recording.status,
       transcription: recording.transcription,
+      insights: recording.insights,
       errorMessage: recording.errorMessage,
     };
   },
@@ -103,7 +163,8 @@ export const listRecordings = query({
       status: v.union(
         v.literal("recording"),
         v.literal("completed"),
-        v.literal("error")
+        v.literal("error"),
+        v.literal("processing")
       ),
     })
   ),

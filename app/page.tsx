@@ -311,21 +311,48 @@ export default function Home() {
         )}
 
         {/* Current Recording Details */}
-        {currentRecording && currentRecording.status === "completed" && (
+        {currentRecording && (currentRecording.status === "completed" || currentRecording.status === "processing" || currentRecording.status === "error") && (
           <div className="mb-8 p-4 border border-neutral-800 rounded-lg">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm opacity-70">{currentRecording.title}</span>
-              <span className="text-xs px-2 py-1 rounded bg-green-900 text-green-300">
-                concluído
+              <span className={`text-xs px-2 py-1 rounded ${
+                currentRecording.status === "completed" ? "bg-green-900 text-green-300" :
+                currentRecording.status === "processing" ? "bg-yellow-900 text-yellow-300" :
+                "bg-red-900 text-red-300"
+              }`}>
+                {currentRecording.status === "completed" ? "concluído" :
+                 currentRecording.status === "processing" ? "processando..." :
+                 "erro"}
               </span>
             </div>
             <p className="text-xs opacity-50 mb-2">
               Duração: {formatDuration(currentRecording.duration)}
             </p>
             {currentRecording.transcription && (
-              <p className="text-sm leading-relaxed whitespace-pre-wrap opacity-80 max-h-48 overflow-y-auto">
-                {currentRecording.transcription}
-              </p>
+              <div className="mb-4">
+                <h3 className="text-xs opacity-60 mb-2">Transcrição:</h3>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap opacity-80 max-h-48 overflow-y-auto">
+                  {currentRecording.transcription}
+                </p>
+              </div>
+            )}
+            {currentRecording.insights && (
+              <div className="mt-4 pt-4 border-t border-neutral-800">
+                <h3 className="text-xs opacity-60 mb-2">Insights:</h3>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap opacity-80 max-h-48 overflow-y-auto">
+                  {currentRecording.insights}
+                </p>
+              </div>
+            )}
+            {currentRecording.status === "processing" && (
+              <div className="mt-4 pt-4 border-t border-neutral-800">
+                <p className="text-xs opacity-50 italic">Gerando insights...</p>
+              </div>
+            )}
+            {currentRecording.errorMessage && (
+              <div className="mt-4 pt-4 border-t border-neutral-800">
+                <p className="text-xs text-red-400">{currentRecording.errorMessage}</p>
+              </div>
             )}
           </div>
         )}
